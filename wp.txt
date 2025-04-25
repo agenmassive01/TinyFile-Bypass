@@ -1,0 +1,406 @@
+<?php
+// File: file-manager.php
+session_start();
+
+// Konfigurasi dasar
+$BASE_DIR = 'uploads';
+$ALLOWED_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'zip'];
+$MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+
+// Autentikasi sederhana
+if (!isset($_SESSION['logged_in'])) {
+    $_SESSION['logged_in'] = false;
+}
+
+// Handle login
+if (isset($_POST['login'])) {
+    $username = $_POST['username'] ?? '';
+    $password = $_POST['password'] ?? '';
+    
+    // Contoh autentikasi sederhana (ganti dengan sistem auth yang lebih aman)
+    if ($username === 'admin' && $password === 'password') {
+        $_SESSION['logged_in'] = true;
+    } else {
+        $login_error = "Username atau password salah";
+    }
+}
+
+// Handle logout
+if (isset($_GET['logout'])) {
+    $_SESSION['logged_in'] = false;
+    session_destroy();
+    header("Location: ?");
+    exit;
+}
+
+// Redirect jika belum login
+if (!$_SESSION['logged_in'] && basename($_SERVER['PHP_SELF']) !== 'file-manager.php') {
+    header("Location: file-manager.php");
+    exit;
+}
+
+// Fungsi utilitas
+function formatSize($bytes) {
+    if ($bytes >= 1073741824) return number_format($bytes / 1073741824, 2) . ' GB';
+    if ($bytes >= 1048576) return number_format($bytes / 1048576, 2) . ' MB';
+    if ($bytes >= 1024) return number_format($bytes / 1024, 2) . ' KB';
+    return $bytes . ' bytes';
+}
+
+function getFileIcon($file) {
+    $ext = strtolower(pathinfo($file, PATHINFO_EXTENSION));
+    $icons = [
+        'jpg' => 'fa-file-image', 'jpeg' => 'fa-file-image', 'png' => 'fa-file-image', 
+        'gif' => 'fa-file-image', 'pdf' => 'fa-file-pdf', 'doc' => 'fa-file-word', 
+        'docx' => 'fa-file-word', 'xls' => 'fa-file-excel', 'xlsx' => 'fa-file-excel',
+        'ppt' => 'fa-file-powerpoint', 'pptx' => 'fa-file-powerpoint', 'zip' => 'fa-file-archive',
+        'txt' => 'fa-file-alt'
+    ];
+    return $icons[$ext] ?? 'fa-file';
+}
+
+// Handle operasi file
+$current_dir = $BASE_DIR;
+if (isset($_GET['dir']) && strpos($_GET['dir'], $BASE_DIR) === 0) {
+    $current_dir = $_GET['dir'];
+}
+
+// Buat folder
+if (isset($_POST['create_folder']) && $_SESSION['logged_in']) {
+    $new_folder = trim($_POST['folder_name']);
+    if (!empty($new_folder)) {
+        $target_dir = $current_dir . '/' . $new_folder;
+        if (!file_exists($target_dir)) {
+            mkdir($target_dir, 0755, true);
+            $message = "Folder berhasil dibuat";
+        } else {
+            $error = "Folder sudah ada";
+        }
+    }
+}
+
+// Upload file
+if (isset($_FILES['file_upload']) && $_SESSION['logged_in']) {
+    $file = $_FILES['file_upload'];
+    $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+    
+    if ($file['size'] > $MAX_FILE_SIZE) {
+        $error = "File terlalu besar (Maks: " . formatSize($MAX_FILE_SIZE) . ")";
+    } elseif (!in_array($ext, $ALLOWED_EXTENSIONS)) {
+        $error = "Tipe file tidak diizinkan";
+    } else {
+        $target_file = $current_dir . '/' . basename($file['name']);
+        if (move_uploaded_file($file['tmp_name'], $target_file)) {
+            $message = "File berhasil diupload";
+        } else {
+            $error = "Gagal mengupload file";
+        }
+    }
+}
+
+// Hapus file/folder
+if (isset($_GET['delete']) && $_SESSION['logged_in']) {
+    $target = $_GET['delete'];
+    if (strpos($target, $BASE_DIR) === 0 && file_exists($target)) {
+        if (is_dir($target)) {
+            if (count(scandir($target)) === 2) {
+                rmdir($target);
+                $message = "Folder berhasil dihapus";
+            } else {
+                $error = "Folder tidak kosong";
+            }
+        } else {
+            unlink($target);
+            $message = "File berhasil dihapus";
+        }
+    }
+}
+
+// Rename file/folder
+if (isset($_POST['rename']) && $_SESSION['logged_in']) {
+    $old_name = $_POST['old_name'];
+    $new_name = trim($_POST['new_name']);
+    
+    if (strpos($old_name, $BASE_DIR) === 0 && file_exists($old_name) && !empty($new_name)) {
+        $path = dirname($old_name);
+        $new_path = $path . '/' . $new_name;
+        
+        if (!file_exists($new_path)) {
+            rename($old_name, $new_path);
+            $message = "Berhasil diubah";
+        } else {
+            $error = "Nama sudah digunakan";
+        }
+    }
+}
+
+// Dapatkan daftar file
+$files = [];
+$folders = [];
+
+if (file_exists($current_dir)) {
+    $items = scandir($current_dir);
+    foreach ($items as $item) {
+        if ($item === '.' || $item === '..') continue;
+        
+        $path = $current_dir . '/' . $item;
+        if (is_dir($path)) {
+            $folders[] = [
+                'name' => $item,
+                'path' => $path,
+                'modified' => filemtime($path)
+            ];
+        } else {
+            $files[] = [
+                'name' => $item,
+                'path' => $path,
+                'size' => filesize($path),
+                'modified' => filemtime($path),
+                'icon' => getFileIcon($item)
+            ];
+        }
+    }
+}
+?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>File Manager</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background: #f1f1f1;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 20px auto;
+            background: #fff;
+            padding: 20px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #ddd;
+        }
+        .breadcrumb {
+            display: flex;
+            align-items: center;
+        }
+        .breadcrumb a {
+            color: #2271b1;
+            text-decoration: none;
+        }
+        .breadcrumb a:hover {
+            color: #135e96;
+        }
+        .file-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+            gap: 15px;
+        }
+        .file-item, .folder-item {
+            border: 1px solid #ddd;
+            padding: 10px;
+            text-align: center;
+            background: #fff;
+            border-radius: 3px;
+            transition: all 0.3s;
+        }
+        .file-item:hover, .folder-item:hover {
+            box-shadow: 0 0 5px rgba(0,0,0,0.2);
+        }
+        .folder-item {
+            background: #f9f9f9;
+        }
+        .file-icon {
+            font-size: 40px;
+            color: #666;
+            margin-bottom: 10px;
+        }
+        .folder-icon {
+            font-size: 40px;
+            color: #ffb900;
+            margin-bottom: 10px;
+        }
+        .file-name {
+            word-break: break-all;
+            font-size: 13px;
+        }
+        .file-size {
+            font-size: 11px;
+            color: #666;
+        }
+        .file-actions {
+            margin-top: 10px;
+            display: flex;
+            justify-content: center;
+            gap: 5px;
+        }
+        .file-actions a {
+            color: #2271b1;
+            text-decoration: none;
+            font-size: 12px;
+        }
+        .file-actions a:hover {
+            color: #135e96;
+        }
+        .message {
+            padding: 10px;
+            margin-bottom: 15px;
+            border-radius: 3px;
+        }
+        .success {
+            background: #d4edda;
+            color: #155724;
+        }
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        .login-form {
+            max-width: 400px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #fff;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+        .login-form input {
+            width: 100%;
+            padding: 8px;
+            margin-bottom: 10px;
+        }
+        .login-form button {
+            background: #2271b1;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            cursor: pointer;
+        }
+        .login-form button:hover {
+            background: #135e96;
+        }
+    </style>
+</head>
+<body>
+    <?php if (!$_SESSION['logged_in']): ?>
+        <div class="login-form">
+            <h2>Login</h2>
+            <?php if (isset($login_error)): ?>
+                <div class="error"><?= $login_error ?></div>
+            <?php endif; ?>
+            <form method="post">
+                <input type="text" name="username" placeholder="Username" required>
+                <input type="password" name="password" placeholder="Password" required>
+                <button type="submit" name="login">Login</button>
+            </form>
+        </div>
+    <?php else: ?>
+        <div class="container">
+            <div class="header">
+                <div class="breadcrumb">
+                    <a href="?dir=<?= $BASE_DIR ?>">Home</a>
+                    <?php 
+                    $dir_parts = explode('/', str_replace($BASE_DIR.'/', '', $current_dir));
+                    $current_path = $BASE_DIR;
+                    foreach ($dir_parts as $part) {
+                        if (!empty($part)) {
+                            $current_path .= '/' . $part;
+                            echo ' &raquo; <a href="?dir='.$current_path.'">'.$part.'</a>';
+                        }
+                    }
+                    ?>
+                </div>
+                <div>
+                    <a href="?logout" style="color: #dc3545;">Logout</a>
+                </div>
+            </div>
+
+            <?php if (isset($message)): ?>
+                <div class="message success"><?= $message ?></div>
+            <?php endif; ?>
+            <?php if (isset($error)): ?>
+                <div class="message error"><?= $error ?></div>
+            <?php endif; ?>
+
+            <div style="margin-bottom: 20px; display: flex; gap: 10px;">
+                <form method="post" style="display: flex; gap: 5px;">
+                    <input type="text" name="folder_name" placeholder="Nama folder baru" required>
+                    <button type="submit" name="create_folder">Buat Folder</button>
+                </form>
+                <form method="post" enctype="multipart/form-data" style="display: flex; gap: 5px;">
+                    <input type="file" name="file_upload" required>
+                    <button type="submit">Upload File</button>
+                </form>
+            </div>
+
+            <div class="file-list">
+                <?php foreach ($folders as $folder): ?>
+                    <div class="folder-item">
+                        <div class="folder-icon">
+                            <i class="fas fa-folder"></i>
+                        </div>
+                        <div class="file-name"><?= $folder['name'] ?></div>
+                        <div class="file-size"><?= date('Y-m-d H:i', $folder['modified']) ?></div>
+                        <div class="file-actions">
+                            <a href="?dir=<?= $folder['path'] ?>">Open</a>
+                            <a href="#" onclick="renameItem('<?= $folder['path'] ?>', '<?= $folder['name'] ?>')">Rename</a>
+                            <a href="?delete=<?= $folder['path'] ?>" onclick="return confirm('Hapus folder ini?')">Delete</a>
+                        </div>
+                    </div>
+                <?php endforeach; ?>
+
+                <?php foreach ($files as $file): ?>
+                    <div class="file-item">
+                        <div class="file-icon">
+                            <i class="fas <?= $file['icon'] ?>"></i>
+                        </div>
+                        <div class="file-name"><?= $file['name'] ?></div>
+                        <div class="file-size">
+                            <?= formatSize($file['size']) ?><br>
+                            <?= date('Y-m-d H:i', $file['modified']) ?>
+                        </div>
+                        <div class="file-actions">
+                            <a href="<?= $file['path'] ?>" target="_blank">View</a>
+                            <a href="#" onclick="renameItem('<?= $file['path'] ?>', '<?= $file['name'] ?>')">Rename</a>
+                            <a href="?delete=<?= $file['path'] ?>" onclick="return confirm('Hapus file ini?')">Delete</a>
+                        </div>
+                    </div>
+                <?php endforeach; ?>
+            </div>
+        </div>
+
+        <div id="rename-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; justify-content: center; align-items: center;">
+            <div style="background: white; padding: 20px; border-radius: 5px; width: 400px;">
+                <h3>Rename</h3>
+                <form method="post" id="rename-form">
+                    <input type="hidden" name="old_name" id="old-name">
+                    <input type="text" name="new_name" id="new-name" style="width: 100%; padding: 8px; margin-bottom: 10px;">
+                    <div style="display: flex; justify-content: flex-end; gap: 10px;">
+                        <button type="button" onclick="document.getElementById('rename-modal').style.display = 'none'" style="padding: 8px 15px;">Cancel</button>
+                        <button type="submit" name="rename" style="padding: 8px 15px; background: #2271b1; color: white; border: none;">Rename</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <script>
+            function renameItem(path, name) {
+                document.getElementById('old-name').value = path;
+                document.getElementById('new-name').value = name;
+                document.getElementById('rename-modal').style.display = 'flex';
+                document.getElementById('new-name').focus();
+                return false;
+            }
+        </script>
+    <?php endif; ?>
+</body>
+</html>
